@@ -242,3 +242,7 @@ def analyze(image_path, out_dir):
 
     result['auto_crop_detection'] = meta
     return annotated, result
+
+
+    result['auto_crop_detection'] = meta
+    return annotated, result
