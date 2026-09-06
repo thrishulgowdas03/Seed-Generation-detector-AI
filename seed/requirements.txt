@@ -1,0 +1,8 @@
+streamlit
+opencv-python
+numpy
+networkx
+scikit-image
+torch
+transformers
+Pillow
