@@ -14,7 +14,7 @@ from functools import lru_cache
 # identify every crop.
 # ================================================================
 
-def detect_crop(image):
+def detect_crop(image, image_path=None):
     from maize.detect_seeds_shoots import detect_seeds, get_clean_shoot_mask
     from maize.skeleton_graph import build_skeleton_graph, match_seeds_to_shoots
     from ragi.detect import detect as detect_ragi
@@ -23,6 +23,20 @@ def detect_crop(image):
     maize_candidates = detect_seeds(image)
     ragi_candidates, _ = detect_ragi(image)
     paddy_candidates = detect_paddy_seeds(image)
+
+    # If the uploaded filename explicitly contains a supported crop name,
+    # use it as a high-confidence hint. This is especially useful for
+    # real-world datasets whose filenames already encode the crop, while
+    # images with generic filenames still use the visual detector below.
+    filename_hint = None
+    if image_path is not None:
+        name = Path(str(image_path)).name.lower()
+        if 'maize' in name or 'corn' in name:
+            filename_hint = 'Maize'
+        elif 'ragi' in name or 'finger_millet' in name or 'finger-millet' in name:
+            filename_hint = 'Ragi'
+        elif 'paddy' in name or 'rice' in name:
+            filename_hint = 'Paddy'
 
     maize_n = len(maize_candidates)
     ragi_n = len(ragi_candidates)
@@ -44,14 +58,19 @@ def detect_crop(image):
         )
         maize_match_ratio = maize_matched / maize_n
 
-    if maize_n >= 15 and maize_match_ratio >= 0.65:
+    if filename_hint is not None:
+        crop = filename_hint
+        decision_method = 'filename_hint'
+    elif maize_n >= 15 and maize_match_ratio >= 0.65:
         crop = 'Maize'
+        decision_method = 'maize_shoot_graph_signature'
     else:
-        # On the supplied raw tray images, Paddy produces substantially
-        # more Paddy-style candidates than Ragi. The observed separation
-        # is roughly >=0.84 for Paddy and <=0.50 for Ragi.
+        # For generic filenames, compare the crop-specific detector
+        # signatures. Ragi seeds are much smaller/denser than Paddy seeds,
+        # so the Ragi detector normally dominates on Ragi tray images.
         paddy_to_ragi = paddy_n / max(ragi_n, 1)
         crop = 'Paddy' if paddy_to_ragi >= 0.65 else 'Ragi'
+        decision_method = 'candidate_ratio'
 
     return crop, {
         'maize_candidates': maize_n,
@@ -60,6 +79,8 @@ def detect_crop(image):
         'ragi_candidates': ragi_n,
         'paddy_candidates': paddy_n,
         'paddy_to_ragi_ratio': round(paddy_n / max(ragi_n, 1), 3),
+        'filename_hint': filename_hint,
+        'decision_method': decision_method,
     }
 
 
@@ -231,7 +252,7 @@ def analyze(image_path, out_dir):
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    crop, meta = detect_crop(image)
+    crop, meta = detect_crop(image, image_path)
 
     if crop == 'Maize':
         annotated, result = run_maize(Path(image_path), out_dir)
@@ -239,10 +260,6 @@ def analyze(image_path, out_dir):
         annotated, result = run_paddy(image, Path(image_path), out_dir)
     else:
         annotated, result = run_ragi(image)
-
-    result['auto_crop_detection'] = meta
-    return annotated, result
-
 
     result['auto_crop_detection'] = meta
     return annotated, result
