@@ -516,9 +516,107 @@ if uploaded:
 
         st.write("")
 
+        # ---------------------------------------------------------------------
+        # PROFESSIONAL GERMINATION CHARTS
+        # Shown directly after the KPI cards so judges see the quality
+        # distribution immediately after analysis.
+        # ---------------------------------------------------------------------
+        g_pct = (germi / total * 100) if total else 0
+        s_pct = (semi / total * 100) if total else 0
+        n_pct = (non / total * 100) if total else 0
+        germinated_pct = (germinated / total * 100) if total else 0
+
+        stop1 = g_pct
+        stop2 = g_pct + s_pct
+
+        quality_gradient = (
+            f"conic-gradient(#1f9d61 0% {stop1:.2f}%, "
+            f"#e2b84b {stop1:.2f}% {stop2:.2f}%, "
+            f"#d76b6b {stop2:.2f}% 100%)"
+        )
+        overall_gradient = (
+            f"conic-gradient(#176b43 0% {germinated_pct:.2f}%, "
+            f"#d76b6b {germinated_pct:.2f}% 100%)"
+        )
+
+        st.markdown(
+            '<div class="section-label">Germination quality overview</div>',
+            unsafe_allow_html=True,
+        )
+
+        p1, p2 = st.columns(2)
+
+        with p1:
+            st.markdown(
+                f"""<div class="pie-panel">
+                    <div class="pie-title">Seed quality distribution</div>
+                    <div class="pie-subtitle">Classification of all detected seeds</div>
+                    <div class="pie-wrap">
+                        <div class="pie-chart" style="background:{quality_gradient};">
+                            <div class="pie-center">
+                                <div class="pie-center-value">{total}</div>
+                                <div class="pie-center-label">total seeds</div>
+                            </div>
+                        </div>
+                        <div class="pie-legend">
+                            <div class="pie-legend-row">
+                                <span class="pie-dot" style="background:#1f9d61"></span>
+                                <span class="pie-legend-name">GERMI</span>
+                                <span class="pie-legend-value">{germi} · {g_pct:.1f}%</span>
+                            </div>
+                            <div class="pie-legend-row">
+                                <span class="pie-dot" style="background:#e2b84b"></span>
+                                <span class="pie-legend-name">SEMI GERMI</span>
+                                <span class="pie-legend-value">{semi} · {s_pct:.1f}%</span>
+                            </div>
+                            <div class="pie-legend-row">
+                                <span class="pie-dot" style="background:#d76b6b"></span>
+                                <span class="pie-legend-name">NON GERMI</span>
+                                <span class="pie-legend-value">{non} · {n_pct:.1f}%</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>""",
+                unsafe_allow_html=True,
+            )
+
+        with p2:
+            st.markdown(
+                f"""<div class="pie-panel">
+                    <div class="pie-title">Overall germination</div>
+                    <div class="pie-subtitle">GERMI + SEMI GERMI counted as germinated</div>
+                    <div class="pie-wrap">
+                        <div class="pie-chart" style="background:{overall_gradient};">
+                            <div class="pie-center">
+                                <div class="pie-center-value">{germinated_pct:.1f}%</div>
+                                <div class="pie-center-label">germinated</div>
+                            </div>
+                        </div>
+                        <div class="pie-legend">
+                            <div class="pie-legend-row">
+                                <span class="pie-dot" style="background:#176b43"></span>
+                                <span class="pie-legend-name">Germinated</span>
+                                <span class="pie-legend-value">{germinated} · {germinated_pct:.1f}%</span>
+                            </div>
+                            <div class="pie-legend-row">
+                                <span class="pie-dot" style="background:#d76b6b"></span>
+                                <span class="pie-legend-name">Non-germinated</span>
+                                <span class="pie-legend-value">{non} · {100-germinated_pct:.1f}%</span>
+                            </div>
+                            <div class="quality-badge">
+                                ● Weighted quality: {float(weighted_rate) * 100:.1f}%
+                            </div>
+                        </div>
+                    </div>
+                </div>""",
+                unsafe_allow_html=True,
+            )
+
+        st.write("")
+
         # Main result area
-        tab_result, tab_distribution, tab_details = st.tabs(
-            ["📸 Visual analysis", "📊 Germination breakdown", "🔍 Technical details"]
+        tab_result, tab_details = st.tabs(
+            ["📸 Visual analysis", "🔍 Technical details"]
         )
 
         with tab_result:
@@ -554,132 +652,3 @@ if uploaded:
                     mime="application/json",
                     use_container_width=True,
                 )
-
-        with tab_distribution:
-            # Lightweight responsive doughnut charts. No extra chart dependency required.
-            g_pct = (germi / total * 100) if total else 0
-            s_pct = (semi / total * 100) if total else 0
-            n_pct = (non / total * 100) if total else 0
-            germinated_pct = (germinated / total * 100) if total else 0
-
-            stop1 = g_pct
-            stop2 = g_pct + s_pct
-            quality_gradient = (
-                f"conic-gradient(#1f9d61 0% {stop1:.2f}%, "
-                f"#e2b84b {stop1:.2f}% {stop2:.2f}%, "
-                f"#d76b6b {stop2:.2f}% 100%)"
-            )
-            overall_gradient = (
-                f"conic-gradient(#176b43 0% {germinated_pct:.2f}%, "
-                f"#d76b6b {germinated_pct:.2f}% 100%)"
-            )
-
-            p1, p2 = st.columns(2)
-            with p1:
-                st.markdown(
-                    f"""<div class="pie-panel">
-                        <div class="pie-title">Germination quality</div>
-                        <div class="pie-subtitle">Distribution across all detected seeds</div>
-                        <div class="pie-wrap">
-                            <div class="pie-chart" style="background:{quality_gradient};">
-                                <div class="pie-center">
-                                    <div class="pie-center-value">{total}</div>
-                                    <div class="pie-center-label">seeds</div>
-                                </div>
-                            </div>
-                            <div class="pie-legend">
-                                <div class="pie-legend-row"><span class="pie-dot" style="background:#1f9d61"></span><span class="pie-legend-name">GERMI</span><span class="pie-legend-value">{germi} - {g_pct:.1f}%</span></div>
-                                <div class="pie-legend-row"><span class="pie-dot" style="background:#e2b84b"></span><span class="pie-legend-name">SEMI GERMI</span><span class="pie-legend-value">{semi} - {s_pct:.1f}%</span></div>
-                                <div class="pie-legend-row"><span class="pie-dot" style="background:#d76b6b"></span><span class="pie-legend-name">NON GERMI</span><span class="pie-legend-value">{non} - {n_pct:.1f}%</span></div>
-                            </div>
-                        </div>
-                    </div>""",
-                    unsafe_allow_html=True,
-                )
-
-            with p2:
-                st.markdown(
-                    f"""<div class="pie-panel">
-                        <div class="pie-title">Overall germination quality</div>
-                        <div class="pie-subtitle">GERMI + SEMI GERMI counted as germinated</div>
-                        <div class="pie-wrap">
-                            <div class="pie-chart" style="background:{overall_gradient};">
-                                <div class="pie-center">
-                                    <div class="pie-center-value">{germinated_pct:.1f}%</div>
-                                    <div class="pie-center-label">germinated</div>
-                                </div>
-                            </div>
-                            <div class="pie-legend">
-                                <div class="pie-legend-row"><span class="pie-dot" style="background:#176b43"></span><span class="pie-legend-name">Germinated</span><span class="pie-legend-value">{germinated} - {germinated_pct:.1f}%</span></div>
-                                <div class="pie-legend-row"><span class="pie-dot" style="background:#d76b6b"></span><span class="pie-legend-name">Non-germinated</span><span class="pie-legend-value">{non} - {100-germinated_pct:.1f}%</span></div>
-                                <div class="quality-badge">Weighted quality: {float(weighted_rate) * 100:.1f}%</div>
-                            </div>
-                        </div>
-                    </div>""",
-                    unsafe_allow_html=True,
-                )
-
-            st.write("")
-            d1, d2 = st.columns([1.05, 1.6])
-            with d1:
-                st.markdown('<div class="section-label">Class counts</div>', unsafe_allow_html=True)
-                for label, count in [("GERMI", germi), ("SEMI GERMI", semi), ("NON GERMI", non)]:
-                    pct = (count / total * 100) if total else 0
-                    st.markdown(
-                        f'<div class="class-card"><div class="class-name">{label}</div>'
-                        f'<div class="bar-bg"><div class="bar-fill" style="width:{pct:.1f}%"></div></div>'
-                        f'<div class="class-meta"><span>{count} seeds</span><span>{pct:.1f}%</span></div></div>',
-                        unsafe_allow_html=True,
-                    )
-            with d2:
-                st.markdown('<div class="section-label">What the numbers mean</div>', unsafe_allow_html=True)
-                st.markdown(
-                    '<div class="info-card">'
-                    '<b>GERMI</b> - clear / developed germination.<br><br>'
-                    '<b>SEMI GERMI</b> - early or partial visible growth.<br><br>'
-                    '<b>NON GERMI</b> - no meaningful visible germination.<br><br>'
-                    '<b>Strict germination</b> counts GERMI + SEMI GERMI as germinated.<br>'
-                    '<b>Weighted germination</b> gives SEMI GERMI half the contribution of GERMI.'
-                    '</div>',
-                    unsafe_allow_html=True,
-                )
-
-        with tab_details:
-            st.markdown('<div class="section-label">How this result was produced</div>', unsafe_allow_html=True)
-            st.write(result.get("method", "Crop-specific computer vision pipeline"))
-
-            meta = result.get("auto_crop_detection", {})
-            if meta:
-                st.markdown("**Automatic crop detection signals**")
-                st.json(meta)
-
-            with st.expander("Show prediction records"):
-                st.json(result.get("predictions", []))
-
-        st.markdown(
-            '<div class="footer">SeedVision AI • Automatic crop-aware seed germination analysis • '
-            'Built for rapid, transparent visual assessment</div>',
-            unsafe_allow_html=True,
-        )
-else:
-    # Empty state / judge-friendly explanation
-    a, b, c = st.columns(3)
-    for col, icon, title, text in [
-        (a, "🎯", "Automatic", "No manual crop selection. The system routes the image to the appropriate pipeline."),
-        (b, "🔬", "Visual evidence", "Every detected seed is marked on the output image so the result can be inspected."),
-        (c, "📈", "Actionable", "Counts and germination percentages turn the image into an easy-to-read result."),
-    ]:
-        with col:
-            st.markdown(
-                f'<div class="metric-card"><div style="font-size:25px">{icon}</div>'
-                f'<div style="font-family:Space Grotesk;font-weight:700;font-size:16px;margin-top:8px">{title}</div>'
-                f'<div class="metric-note" style="font-size:12px;line-height:1.5;margin-top:7px">{text}</div></div>',
-                unsafe_allow_html=True,
-            )
-
-    st.write("")
-    st.markdown(
-        '<div class="info-card"><b>Demo tip:</b> Upload one of the prepared tray images and the dashboard will automatically '
-        'identify Maize, Ragi, or Paddy, then show the detected seeds and germination analysis.</div>',
-        unsafe_allow_html=True,
-    )
