@@ -1,265 +1,685 @@
+import json
+import tempfile
 from pathlib import Path
+
 import cv2
-from functools import lru_cache
+import streamlit as st
+
+from pipeline import analyze
 
 
-# ================================================================
-# AUTOMATIC 3-CROP DETECTION
-#   Maize -> proven Maize detector
-#   Ragi  -> OpenCV Ragi detector
-#   Paddy -> OpenCV Paddy detector
-#
-# The detectors have very different signatures, so crop detection is
-# based on their candidate counts rather than forcing one detector to
-# identify every crop.
-# ================================================================
+# -----------------------------------------------------------------------------
+# PAGE
+# -----------------------------------------------------------------------------
+st.set_page_config(
+    page_title="SeedVision AI | Germination Intelligence",
+    page_icon="🌱",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
 
-def detect_crop(image, image_path=None):
-    from maize.detect_seeds_shoots import detect_seeds, get_clean_shoot_mask
-    from maize.skeleton_graph import build_skeleton_graph, match_seeds_to_shoots
-    from ragi.detect import detect as detect_ragi
-    from paddy.detector import detect_paddy_seeds
+# -----------------------------------------------------------------------------
+# PROFESSIONAL THEME
+# -----------------------------------------------------------------------------
+st.markdown(
+    """
+    <style>
+    @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap');
 
-    maize_candidates = detect_seeds(image)
-    ragi_candidates, _ = detect_ragi(image)
-    paddy_candidates = detect_paddy_seeds(image)
+    html, body, [class*="css"] {
+        font-family: 'DM Sans', sans-serif;
+    }
 
-    # If the uploaded filename explicitly contains a supported crop name,
-    # use it as a high-confidence hint. This is especially useful for
-    # real-world datasets whose filenames already encode the crop, while
-    # images with generic filenames still use the visual detector below.
-    filename_hint = None
-    if image_path is not None:
-        name = Path(str(image_path)).name.lower()
-        if 'maize' in name or 'corn' in name:
-            filename_hint = 'Maize'
-        elif 'ragi' in name or 'finger_millet' in name or 'finger-millet' in name:
-            filename_hint = 'Ragi'
-        elif 'paddy' in name or 'rice' in name:
-            filename_hint = 'Paddy'
+    .stApp {
+        background:
+            radial-gradient(circle at 88% 3%, rgba(43, 170, 99, 0.10), transparent 25%),
+            radial-gradient(circle at 4% 30%, rgba(21, 101, 192, 0.06), transparent 24%),
+            #f7f9f8;
+    }
 
-    maize_n = len(maize_candidates)
-    ragi_n = len(ragi_candidates)
-    paddy_n = len(paddy_candidates)
+    .block-container {
+        max-width: 1380px;
+        padding-top: 1.5rem;
+        padding-bottom: 3rem;
+    }
 
-    # A Maize image normally has many seed/shoot associations. The
-    # Maize detector alone can also find brown Paddy objects, so use the
-    # proven skeleton-graph association as the Maize-specific signature.
-    maize_matched = 0
-    maize_match_ratio = 0.0
-    if maize_n:
-        shoot_mask = get_clean_shoot_mask(image)
-        _, graph, degrees, endpoints = build_skeleton_graph(shoot_mask)
-        matches = match_seeds_to_shoots(
-            maize_candidates, endpoints, graph, degrees, 2.0
+    h1, h2, h3 {
+        font-family: 'Space Grotesk', sans-serif !important;
+    }
+
+    .hero {
+        background: linear-gradient(135deg, #0c3325 0%, #155c3c 58%, #1f7a4e 100%);
+        border-radius: 24px;
+        padding: 30px 34px;
+        color: white;
+        box-shadow: 0 18px 45px rgba(13, 61, 40, 0.18);
+        margin-bottom: 22px;
+        position: relative;
+        overflow: hidden;
+    }
+
+    .hero:after {
+        content: '✦';
+        position: absolute;
+        right: 38px;
+        top: 12px;
+        font-size: 92px;
+        opacity: 0.08;
+    }
+
+    .hero-kicker {
+        font-size: 12px;
+        font-weight: 700;
+        letter-spacing: 1.8px;
+        text-transform: uppercase;
+        opacity: 0.78;
+        margin-bottom: 8px;
+    }
+
+    .hero-title {
+        font-family: 'Space Grotesk', sans-serif;
+        font-size: 34px;
+        line-height: 1.08;
+        font-weight: 700;
+        margin: 0;
+    }
+
+    .hero-subtitle {
+        margin-top: 10px;
+        font-size: 15px;
+        max-width: 760px;
+        opacity: 0.88;
+        line-height: 1.55;
+    }
+
+    .pill-row { margin-top: 18px; }
+    .pill {
+        display: inline-block;
+        padding: 6px 11px;
+        margin-right: 7px;
+        margin-bottom: 5px;
+        border: 1px solid rgba(255,255,255,0.18);
+        border-radius: 999px;
+        background: rgba(255,255,255,0.09);
+        font-size: 12px;
+        font-weight: 600;
+    }
+
+    .section-label {
+        font-family: 'Space Grotesk', sans-serif;
+        font-size: 20px;
+        font-weight: 700;
+        margin: 14px 0 10px 0;
+        color: #163126;
+    }
+
+    .upload-card {
+        background: white;
+        border: 1px solid #e1e8e4;
+        border-radius: 18px;
+        padding: 19px 22px 8px 22px;
+        box-shadow: 0 8px 25px rgba(20, 40, 30, 0.055);
+        margin-bottom: 18px;
+    }
+
+    .metric-card {
+        background: white;
+        border: 1px solid #e1e8e4;
+        border-radius: 16px;
+        padding: 17px 18px;
+        min-height: 112px;
+        box-shadow: 0 7px 20px rgba(20, 40, 30, 0.045);
+    }
+
+    .metric-label {
+        font-size: 12px;
+        color: #687871;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.7px;
+    }
+
+    .metric-value {
+        font-family: 'Space Grotesk', sans-serif;
+        font-size: 29px;
+        font-weight: 700;
+        color: #14271f;
+        margin-top: 8px;
+    }
+
+    .metric-note {
+        font-size: 11px;
+        color: #87948e;
+        margin-top: 3px;
+    }
+
+    .status {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        border-radius: 999px;
+        padding: 7px 12px;
+        font-size: 12px;
+        font-weight: 700;
+        background: #e8f7ee;
+        color: #17683d;
+        border: 1px solid #cdebd9;
+    }
+
+    .dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: #20a464;
+        display: inline-block;
+    }
+
+    .class-card {
+        background: white;
+        border: 1px solid #e1e8e4;
+        border-radius: 15px;
+        padding: 14px 16px;
+        margin-bottom: 10px;
+    }
+
+    .class-name {
+        font-weight: 700;
+        color: #183128;
+        font-size: 13px;
+    }
+
+    .bar-bg {
+        height: 8px;
+        background: #edf1ef;
+        border-radius: 20px;
+        overflow: hidden;
+        margin-top: 9px;
+    }
+
+    .bar-fill {
+        height: 100%;
+        border-radius: 20px;
+        background: linear-gradient(90deg, #1e8f58, #62bd82);
+    }
+
+    .class-meta {
+        display: flex;
+        justify-content: space-between;
+        font-size: 12px;
+        color: #718078;
+        margin-top: 6px;
+    }
+
+    .pie-panel {
+        background: white;
+        border: 1px solid #e1e8e4;
+        border-radius: 18px;
+        padding: 20px;
+        box-shadow: 0 8px 25px rgba(20, 40, 30, 0.055);
+        height: 100%;
+    }
+
+    .pie-title {
+        font-family: 'Space Grotesk', sans-serif;
+        font-size: 17px;
+        font-weight: 700;
+        color: #183128;
+        margin-bottom: 2px;
+    }
+
+    .pie-subtitle {
+        font-size: 12px;
+        color: #7a8881;
+        margin-bottom: 14px;
+    }
+
+    .pie-wrap {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 24px;
+        flex-wrap: wrap;
+    }
+
+    .pie-chart {
+        width: 178px;
+        height: 178px;
+        border-radius: 50%;
+        position: relative;
+        flex: 0 0 auto;
+        box-shadow: inset 0 0 0 1px rgba(20, 40, 30, 0.06);
+    }
+
+    .pie-chart::after {
+        content: '';
+        position: absolute;
+        width: 94px;
+        height: 94px;
+        left: 42px;
+        top: 42px;
+        border-radius: 50%;
+        background: white;
+        box-shadow: 0 1px 4px rgba(20, 40, 30, 0.08);
+    }
+
+    .pie-center {
+        position: absolute;
+        z-index: 2;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex-direction: column;
+        pointer-events: none;
+    }
+
+    .pie-center-value {
+        font-family: 'Space Grotesk', sans-serif;
+        font-size: 24px;
+        font-weight: 700;
+        color: #163126;
+        line-height: 1;
+    }
+
+    .pie-center-label {
+        font-size: 10px;
+        color: #7a8881;
+        margin-top: 5px;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+    }
+
+    .pie-legend { min-width: 155px; }
+    .pie-legend-row {
+        display: flex;
+        align-items: center;
+        gap: 9px;
+        margin: 10px 0;
+        font-size: 12px;
+        color: #43544c;
+    }
+    .pie-dot {
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        flex: 0 0 auto;
+    }
+    .pie-legend-name { flex: 1; font-weight: 600; }
+    .pie-legend-value { font-weight: 700; color: #183128; }
+    .quality-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        padding: 7px 11px;
+        border-radius: 999px;
+        background: #f1f7f3;
+        border: 1px solid #dcebe2;
+        color: #315044;
+        font-size: 11px;
+        font-weight: 700;
+        margin-top: 10px;
+    }
+
+    .info-card {
+        background: #f1f7f3;
+        border: 1px solid #dcebe2;
+        border-radius: 15px;
+        padding: 16px 18px;
+        color: #315044;
+        font-size: 13px;
+        line-height: 1.55;
+    }
+
+    .footer {
+        text-align: center;
+        color: #89958f;
+        font-size: 11px;
+        padding-top: 28px;
+    }
+
+    div[data-testid="stFileUploader"] {
+        border-radius: 14px;
+    }
+
+    div[data-testid="stSidebar"] {
+        background: #10251c;
+    }
+
+    div[data-testid="stSidebar"] * {
+        color: #edf5f0;
+    }
+
+    .sidebar-brand {
+        font-family: 'Space Grotesk', sans-serif;
+        font-size: 21px;
+        font-weight: 700;
+        margin-bottom: 2px;
+    }
+
+    .sidebar-muted {
+        color: #a9bbb1 !important;
+        font-size: 12px;
+        line-height: 1.5;
+    }
+
+    .step {
+        display: flex;
+        gap: 10px;
+        margin: 11px 0;
+        align-items: center;
+    }
+
+    .step-num {
+        width: 24px;
+        height: 24px;
+        border-radius: 50%;
+        background: rgba(111, 203, 145, 0.16);
+        border: 1px solid rgba(111, 203, 145, 0.28);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 11px;
+        font-weight: 700;
+        color: #bfe8cc;
+    }
+
+    .step-text { font-size: 12px; color: #dce8e1; }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+# -----------------------------------------------------------------------------
+# SIDEBAR
+# -----------------------------------------------------------------------------
+with st.sidebar:
+    st.markdown('<div class="sidebar-brand">🌱 SeedVision AI</div>', unsafe_allow_html=True)
+    st.markdown('<div class="sidebar-muted">Automated seed germination intelligence</div>', unsafe_allow_html=True)
+    st.markdown("---")
+
+    st.markdown("**How it works**")
+    steps = [
+        ("1", "Upload one tray image"),
+        ("2", "Identify crop automatically"),
+        ("3", "Detect individual seeds"),
+        ("4", "Classify germination stage"),
+        ("5", "Generate visual + numeric results"),
+    ]
+    for n, text in steps:
+        st.markdown(
+            f'<div class="step"><div class="step-num">{n}</div><div class="step-text">{text}</div></div>',
+            unsafe_allow_html=True,
         )
-        maize_matched = sum(
-            bool(m.get('shoot_found')) for m in matches
+
+    st.markdown("---")
+    st.markdown("**Supported crops**")
+    st.markdown("🌽 Maize  ·  🌾 Ragi  ·  🌱 Paddy")
+    st.markdown("---")
+    st.markdown("**Analysis design**")
+    st.markdown('<div class="sidebar-muted">Crop-specific OpenCV detection with pretrained CLIP classification. No manual crop selection.</div>', unsafe_allow_html=True)
+
+# -----------------------------------------------------------------------------
+# HERO
+# -----------------------------------------------------------------------------
+st.markdown(
+    """
+    <div class="hero">
+        <div class="hero-kicker">AI-powered seed analysis platform</div>
+        <div class="hero-title">From one photograph to<br>germination intelligence.</div>
+        <div class="hero-subtitle">
+            Automatically identify the crop, locate individual seeds, classify germination stage,
+            and present clear statistics with visual evidence — all from a single image.
+        </div>
+        <div class="pill-row">
+            <span class="pill">⚡ Automated</span>
+            <span class="pill">🧠 Computer Vision + AI</span>
+            <span class="pill">🌽 Maize</span>
+            <span class="pill">🌾 Ragi</span>
+            <span class="pill">🌱 Paddy</span>
+        </div>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
+
+st.markdown('<div class="section-label">Start an analysis</div>', unsafe_allow_html=True)
+st.markdown('<div class="upload-card">', unsafe_allow_html=True)
+uploaded = st.file_uploader(
+    "Upload a clear tray / paper image",
+    type=["jpg", "jpeg", "png"],
+    help="For best results, keep the seeds visible, reasonably separated, and well lit.",
+)
+st.markdown('</div>', unsafe_allow_html=True)
+
+# -----------------------------------------------------------------------------
+# ANALYSIS
+# -----------------------------------------------------------------------------
+if uploaded:
+    data = uploaded.getvalue()
+    suffix = Path(uploaded.name).suffix or ".jpg"
+
+    with tempfile.TemporaryDirectory() as td:
+        input_path = Path(td) / f"input{suffix}"
+        input_path.write_bytes(data)
+
+        try:
+            progress = st.progress(0, text="Preparing image analysis…")
+            progress.progress(15, text="Detecting crop and seed candidates…")
+            annotated, result = analyze(input_path, td)
+            progress.progress(100, text="Analysis complete")
+            progress.empty()
+        except Exception as e:
+            st.error("Analysis could not be completed.")
+            with st.expander("Technical error details"):
+                st.exception(e)
+            st.stop()
+
+        crop = result.get("crop", "Unknown")
+        counts = result.get("counts", {})
+        total = int(result.get("total_seeds", sum(counts.values())))
+        germi = int(counts.get("GERMI", 0))
+        semi = int(counts.get("SEMI GERMI", 0))
+        non = int(counts.get("NON GERMI", 0))
+        germinated = int(result.get("germinated_total", germi + semi))
+        strict_rate = float(result.get("germination_rate", germinated / total if total else 0))
+        weighted_rate = result.get("weighted_germination_rate")
+        if weighted_rate is None:
+            weighted_rate = (germi + 0.5 * semi) / total if total else 0
+
+        # Result header
+        left, right = st.columns([3.8, 1.2])
+        with left:
+            st.markdown('<div class="section-label">Analysis complete</div>', unsafe_allow_html=True)
+            st.markdown(
+                f'<div class="status"><span class="dot"></span> Crop automatically identified: {crop}</div>',
+                unsafe_allow_html=True,
+            )
+        with right:
+            st.markdown("**File**")
+            st.code(uploaded.name, language=None)
+
+        # KPI cards
+        c1, c2, c3, c4 = st.columns(4)
+        cards = [
+            ("Total seeds", f"{total}", "Detected candidates"),
+            ("GERMI", f"{germi}", "Clearly germinated"),
+            ("SEMI GERMI", f"{semi}", "Early / partial growth"),
+            ("Germination", f"{strict_rate * 100:.1f}%", "GERMI + SEMI GERMI"),
+        ]
+        for col, (label, value, note) in zip([c1, c2, c3, c4], cards):
+            with col:
+                st.markdown(
+                    f'<div class="metric-card"><div class="metric-label">{label}</div>'
+                    f'<div class="metric-value">{value}</div><div class="metric-note">{note}</div></div>',
+                    unsafe_allow_html=True,
+                )
+
+        st.write("")
+
+        # Main result area
+        tab_result, tab_distribution, tab_details = st.tabs(
+            ["📸 Visual analysis", "📊 Germination breakdown", "🔍 Technical details"]
         )
-        maize_match_ratio = maize_matched / maize_n
 
-    if filename_hint is not None:
-        crop = filename_hint
-        decision_method = 'filename_hint'
-    elif maize_n >= 15 and maize_match_ratio >= 0.65:
-        crop = 'Maize'
-        decision_method = 'maize_shoot_graph_signature'
-    else:
-        # For generic filenames, compare the crop-specific detector
-        # signatures. Ragi seeds are much smaller/denser than Paddy seeds,
-        # so the Ragi detector normally dominates on Ragi tray images.
-        paddy_to_ragi = paddy_n / max(ragi_n, 1)
-        crop = 'Paddy' if paddy_to_ragi >= 0.65 else 'Ragi'
-        decision_method = 'candidate_ratio'
+        with tab_result:
+            img_col, summary_col = st.columns([2.25, 1])
+            with img_col:
+                st.image(
+                    cv2.cvtColor(annotated, cv2.COLOR_BGR2RGB),
+                    caption="Annotated output — each detected seed is marked with its predicted germination stage.",
+                    use_container_width=True,
+                )
+            with summary_col:
+                st.markdown('<div class="section-label">Quick interpretation</div>', unsafe_allow_html=True)
+                st.markdown(
+                    f'<div class="info-card"><b>{germinated}</b> of <b>{total}</b> detected seeds '
+                    f'are classified as germinated when GERMI and SEMI GERMI are counted together.<br><br>'
+                    f'<b>{non}</b> are classified as non-germinated.<br><br>'
+                    f'Weighted germination: <b>{float(weighted_rate) * 100:.1f}%</b>.</div>',
+                    unsafe_allow_html=True,
+                )
 
-    return crop, {
-        'maize_candidates': maize_n,
-        'maize_shoot_matches': maize_matched,
-        'maize_shoot_match_ratio': round(maize_match_ratio, 3),
-        'ragi_candidates': ragi_n,
-        'paddy_candidates': paddy_n,
-        'paddy_to_ragi_ratio': round(paddy_n / max(ragi_n, 1), 3),
-        'filename_hint': filename_hint,
-        'decision_method': decision_method,
-    }
+                st.write("")
+                st.download_button(
+                    "⬇ Download annotated image",
+                    data=cv2.imencode(".jpg", annotated)[1].tobytes(),
+                    file_name=f"{Path(uploaded.name).stem}_annotated.jpg",
+                    mime="image/jpeg",
+                    use_container_width=True,
+                )
+                st.download_button(
+                    "⬇ Download analysis JSON",
+                    data=json.dumps(result, indent=2, default=str),
+                    file_name=f"{Path(uploaded.name).stem}_result.json",
+                    mime="application/json",
+                    use_container_width=True,
+                )
 
+        with tab_distribution:
+            # Lightweight responsive doughnut charts. No extra chart dependency required.
+            g_pct = (germi / total * 100) if total else 0
+            s_pct = (semi / total * 100) if total else 0
+            n_pct = (non / total * 100) if total else 0
+            germinated_pct = (germinated / total * 100) if total else 0
 
-@lru_cache(maxsize=1)
-def get_ragi_clip():
-    from ragi.clip_classify import RagiCLIPClassifier
-    return RagiCLIPClassifier(crop_radius=42, upscale=4)
+            stop1 = g_pct
+            stop2 = g_pct + s_pct
+            quality_gradient = (
+                f"conic-gradient(#1f9d61 0% {stop1:.2f}%, "
+                f"#e2b84b {stop1:.2f}% {stop2:.2f}%, "
+                f"#d76b6b {stop2:.2f}% 100%)"
+            )
+            overall_gradient = (
+                f"conic-gradient(#176b43 0% {germinated_pct:.2f}%, "
+                f"#d76b6b {germinated_pct:.2f}% 100%)"
+            )
 
+            p1, p2 = st.columns(2)
+            with p1:
+                st.markdown(
+                    f"""<div class="pie-panel">
+                        <div class="pie-title">Germination quality</div>
+                        <div class="pie-subtitle">Distribution across all detected seeds</div>
+                        <div class="pie-wrap">
+                            <div class="pie-chart" style="background:{quality_gradient};">
+                                <div class="pie-center">
+                                    <div class="pie-center-value">{total}</div>
+                                    <div class="pie-center-label">seeds</div>
+                                </div>
+                            </div>
+                            <div class="pie-legend">
+                                <div class="pie-legend-row"><span class="pie-dot" style="background:#1f9d61"></span><span class="pie-legend-name">GERMI</span><span class="pie-legend-value">{germi} - {g_pct:.1f}%</span></div>
+                                <div class="pie-legend-row"><span class="pie-dot" style="background:#e2b84b"></span><span class="pie-legend-name">SEMI GERMI</span><span class="pie-legend-value">{semi} - {s_pct:.1f}%</span></div>
+                                <div class="pie-legend-row"><span class="pie-dot" style="background:#d76b6b"></span><span class="pie-legend-name">NON GERMI</span><span class="pie-legend-value">{non} - {n_pct:.1f}%</span></div>
+                            </div>
+                        </div>
+                    </div>""",
+                    unsafe_allow_html=True,
+                )
 
-def run_ragi(image):
-    from ragi.detect import detect
-    candidates, roi = detect(image)
+            with p2:
+                st.markdown(
+                    f"""<div class="pie-panel">
+                        <div class="pie-title">Overall germination quality</div>
+                        <div class="pie-subtitle">GERMI + SEMI GERMI counted as germinated</div>
+                        <div class="pie-wrap">
+                            <div class="pie-chart" style="background:{overall_gradient};">
+                                <div class="pie-center">
+                                    <div class="pie-center-value">{germinated_pct:.1f}%</div>
+                                    <div class="pie-center-label">germinated</div>
+                                </div>
+                            </div>
+                            <div class="pie-legend">
+                                <div class="pie-legend-row"><span class="pie-dot" style="background:#176b43"></span><span class="pie-legend-name">Germinated</span><span class="pie-legend-value">{germinated} - {germinated_pct:.1f}%</span></div>
+                                <div class="pie-legend-row"><span class="pie-dot" style="background:#d76b6b"></span><span class="pie-legend-name">Non-germinated</span><span class="pie-legend-value">{non} - {100-germinated_pct:.1f}%</span></div>
+                                <div class="quality-badge">Weighted quality: {float(weighted_rate) * 100:.1f}%</div>
+                            </div>
+                        </div>
+                    </div>""",
+                    unsafe_allow_html=True,
+                )
 
-    classifier = get_ragi_clip()
-    centers = [(c['x'], c['y']) for c in candidates]
-    clip_results, patch_boxes = classifier.classify(image, centers) if centers else ([], [])
+            st.write("")
+            d1, d2 = st.columns([1.05, 1.6])
+            with d1:
+                st.markdown('<div class="section-label">Class counts</div>', unsafe_allow_html=True)
+                for label, count in [("GERMI", germi), ("SEMI GERMI", semi), ("NON GERMI", non)]:
+                    pct = (count / total * 100) if total else 0
+                    st.markdown(
+                        f'<div class="class-card"><div class="class-name">{label}</div>'
+                        f'<div class="bar-bg"><div class="bar-fill" style="width:{pct:.1f}%"></div></div>'
+                        f'<div class="class-meta"><span>{count} seeds</span><span>{pct:.1f}%</span></div></div>',
+                        unsafe_allow_html=True,
+                    )
+            with d2:
+                st.markdown('<div class="section-label">What the numbers mean</div>', unsafe_allow_html=True)
+                st.markdown(
+                    '<div class="info-card">'
+                    '<b>GERMI</b> - clear / developed germination.<br><br>'
+                    '<b>SEMI GERMI</b> - early or partial visible growth.<br><br>'
+                    '<b>NON GERMI</b> - no meaningful visible germination.<br><br>'
+                    '<b>Strict germination</b> counts GERMI + SEMI GERMI as germinated.<br>'
+                    '<b>Weighted germination</b> gives SEMI GERMI half the contribution of GERMI.'
+                    '</div>',
+                    unsafe_allow_html=True,
+                )
 
-    annotated = image.copy()
-    counts = {'GERMI': 0, 'SEMI GERMI': 0, 'NON GERMI': 0}
-    predictions = []
-    colors = {
-        'GERMI': (0, 180, 0),
-        'SEMI GERMI': (0, 180, 255),
-        'NON GERMI': (0, 0, 200),
-    }
+        with tab_details:
+            st.markdown('<div class="section-label">How this result was produced</div>', unsafe_allow_html=True)
+            st.write(result.get("method", "Crop-specific computer vision pipeline"))
 
-    for c, (cls, conf, scores), patch_box in zip(candidates, clip_results, patch_boxes):
-        counts[cls] += 1
-        predictions.append({
-            'id': c['id'],
-            'class_name': cls,
-            'confidence': conf,
-            'center': [c['x'], c['y']],
-            'size': c['size'],
-            'detail': {
-                'method': 'clip_3class',
-                'class_scores': scores,
-                'patch_box': {
-                    'x1': patch_box[0], 'y1': patch_box[1],
-                    'x2': patch_box[2], 'y2': patch_box[3],
-                },
-            },
-        })
-        x, y = int(c['x']), int(c['y'])
-        cv2.circle(annotated, (x, y), 7, colors[cls], 2)
-        cv2.putText(
-            annotated, f'{c["id"]}:{cls[:4]} {conf:.2f}',
-            (x + 5, y - 4), cv2.FONT_HERSHEY_SIMPLEX,
-            0.34, colors[cls], 1, cv2.LINE_AA,
+            meta = result.get("auto_crop_detection", {})
+            if meta:
+                st.markdown("**Automatic crop detection signals**")
+                st.json(meta)
+
+            with st.expander("Show prediction records"):
+                st.json(result.get("predictions", []))
+
+        st.markdown(
+            '<div class="footer">SeedVision AI • Automatic crop-aware seed germination analysis • '
+            'Built for rapid, transparent visual assessment</div>',
+            unsafe_allow_html=True,
         )
+else:
+    # Empty state / judge-friendly explanation
+    a, b, c = st.columns(3)
+    for col, icon, title, text in [
+        (a, "🎯", "Automatic", "No manual crop selection. The system routes the image to the appropriate pipeline."),
+        (b, "🔬", "Visual evidence", "Every detected seed is marked on the output image so the result can be inspected."),
+        (c, "📈", "Actionable", "Counts and germination percentages turn the image into an easy-to-read result."),
+    ]:
+        with col:
+            st.markdown(
+                f'<div class="metric-card"><div style="font-size:25px">{icon}</div>'
+                f'<div style="font-family:Space Grotesk;font-weight:700;font-size:16px;margin-top:8px">{title}</div>'
+                f'<div class="metric-note" style="font-size:12px;line-height:1.5;margin-top:7px">{text}</div></div>',
+                unsafe_allow_html=True,
+            )
 
-    total = len(predictions)
-    germinated = counts['GERMI'] + counts['SEMI GERMI']
-    rate = germinated / total if total else 0.0
-    weighted = (counts['GERMI'] + 0.5 * counts['SEMI GERMI']) / total if total else 0.0
-
-    return annotated, {
-        'crop': 'Ragi',
-        'total_seeds': total,
-        'counts': counts,
-        'germinated_total': germinated,
-        'germination_rate': round(rate, 4),
-        'weighted_germination_rate': round(weighted, 4),
-        'paper_roi': dict(zip(['x1', 'y1', 'x2', 'y2'], roi)),
-        'predictions': predictions,
-        'method': 'OpenCV Ragi seed-body detection + CLIP 3-class germination classification',
-        'classifier': 'openai/clip-vit-base-patch32',
-        'manual_review': False,
-    }
-
-
-def run_paddy(image, image_path, out_dir):
-    from paddy.detector import detect_paddy_seeds, annotate_paddy
-    from paddy.clip_classify import classify_paddy
-
-    candidates = detect_paddy_seeds(image)
-    predictions = classify_paddy(image, candidates)
-
-    counts = {'GERMI': 0, 'SEMI GERMI': 0, 'NON GERMI': 0}
-    for p in predictions:
-        counts[p['class']] += 1
-
-    total = len(predictions)
-    germinated = counts['GERMI'] + counts['SEMI GERMI']
-    strict_rate = germinated / total if total else 0.0
-    weighted_rate = (counts['GERMI'] + 0.5 * counts['SEMI GERMI']) / total if total else 0.0
-
-    annotated = annotate_paddy(image, predictions)
-    out_dir = Path(out_dir)
-    paddy_dir = out_dir / 'paddy'
-    paddy_dir.mkdir(parents=True, exist_ok=True)
-    stem = Path(image_path).stem
-    annotated_path = paddy_dir / f'{stem}_paddy_annotated.jpg'
-
-    cv2.imwrite(str(annotated_path), annotated)
-
-    # Keep the dashboard schema consistent across all three crops.
-    return annotated, {
-        'crop': 'Paddy',
-        'image': Path(image_path).name,
-        'annotated_image': str(annotated_path),
-        'method': 'OpenCV seed detection + Paddy-tailored CLIP 3-class germination classification',
-        'counts': counts,
-        'total_seeds': total,
-        'germinated_total': germinated,
-        'germination_rate': round(strict_rate, 4),
-        'germination_rate_strict_percent': round(strict_rate * 100, 2),
-        'weighted_germination_rate': round(weighted_rate, 4),
-        'weighted_germination_rate_percent': round(weighted_rate * 100, 2),
-        'predictions': predictions,
-        'manual_review': False,
-    }
-
-
-def run_maize(image_path, out_dir):
-    from maize.infer_dashboard import run
-
-    result = run(str(image_path), out_dir=str(Path(out_dir) / 'maize'))
-    annotated = cv2.imread(result['annotated_image'])
-
-    # Normalize both the newer top-level Maize schema and the older
-    # nested analytics schema.
-    analytics = result.get('analytics', {})
-    counts = result.get('counts', analytics.get('counts', {}))
-    total = result.get('total_seeds', analytics.get('total_seeds', sum(counts.values())))
-    germinated_total = result.get(
-        'germinated_total',
-        analytics.get(
-            'germinated_total',
-            counts.get('germinated', 0) + counts.get('semi_germinated', 0),
-        ),
+    st.write("")
+    st.markdown(
+        '<div class="info-card"><b>Demo tip:</b> Upload one of the prepared tray images and the dashboard will automatically '
+        'identify Maize, Ragi, or Paddy, then show the detected seeds and germination analysis.</div>',
+        unsafe_allow_html=True,
     )
-    rate = result.get('germination_rate', analytics.get('germination_rate'))
-    if rate is None:
-        rate = germinated_total / total if total else 0.0
-
-    weighted = result.get(
-        'weighted_germination_rate',
-        analytics.get('weighted_germination_rate'),
-    )
-
-    # Convert Maize's class names to the common dashboard vocabulary.
-    common_counts = {
-        'GERMI': counts.get('germinated', counts.get('GERMI', 0)),
-        'SEMI GERMI': counts.get('semi_germinated', counts.get('SEMI GERMI', 0)),
-        'NON GERMI': counts.get('non_germinated', counts.get('NON GERMI', 0)),
-    }
-
-    return annotated, {
-        'crop': 'Maize',
-        'image': result.get('image', str(image_path)),
-        'annotated_image': result.get('annotated_image'),
-        'counts': common_counts,
-        'total_seeds': total,
-        'germinated_total': germinated_total,
-        'germination_rate': rate,
-        'weighted_germination_rate': weighted,
-        'predictions': result.get('predictions', []),
-        'method': 'HSV seed/shoot detection + skeleton graph + CLIP tie-break',
-        'manual_review': False,
-    }
-
-
-def analyze(image_path, out_dir):
-    image = cv2.imread(str(image_path))
-    if image is None:
-        raise ValueError(f'Could not read image: {image_path}')
-
-    out_dir = Path(out_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
-
-    crop, meta = detect_crop(image, image_path)
-
-    if crop == 'Maize':
-        annotated, result = run_maize(Path(image_path), out_dir)
-    elif crop == 'Paddy':
-        annotated, result = run_paddy(image, Path(image_path), out_dir)
-    else:
-        annotated, result = run_ragi(image)
-
-    result['auto_crop_detection'] = meta
-    return annotated, result
